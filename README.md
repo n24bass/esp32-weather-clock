@@ -6,6 +6,12 @@
 ![image1](WFTB-01.png)
 ![image2](WFTB-02.png)
 
+- IDE:Arduino / ESP32 C3 Dev Module
+- ArduinoJson 7.1.0
+- Adafruit_GFX 1.11.7
+- Adafruit_ST7735  1.10.3
+- ArduinoOTA 1.1.0
+
 # ESP8266-ST7735-Weather-Clock
 
 [中文在最后]
