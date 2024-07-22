@@ -3,8 +3,8 @@
 - ESP8266 ST7735 Weather Clock - https://github.com/redpower1998/esp8266-st7735-weather-clock
 - Hacking the WiFi Toothbrush - https://github.com/atc1441/ATC_Wifi_Toothbrush
 
-(!WFTB-01.png)
-(!WFTB-02.png)
+![image1](WFTB-01.png)
+![image2](WFTB-02.png)
 
 # ESP8266-ST7735-Weather-Clock
 
