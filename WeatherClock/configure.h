@@ -5,17 +5,17 @@
 const char* ssid = "XXXXXXXXx";
 const char* password = "XXXXXXXXXXX";
 
-
 String APIKEY = "XXXXXXXXXXXXXXXXX"; //openweathermap.org APIkey
-String CityID = "XXXXXXX";  //ID not name
+String CityID = "XXXXXXX"; // 2128295 for Sapporo - ID not name
 
-const int timezone = 8;
+const int timezone = 9; // 9 for JAPAN
 int dst = 0;
 
-// Pins
-#define TFT_CS     D1
-#define TFT_RST    D2
-#define TFT_RS     D3  // AO
-#define TFT_SDI    D7  
+// Pins for ESP32-C3 WiFi Toothbrush
+#define TFT_CS     10
+#define TFT_RST    -1
+#define TFT_DC     8
+#define TFT_SDI    7
+#define TFT_CLK    6
 
 #endif

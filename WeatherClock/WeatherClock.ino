@@ -1,3 +1,14 @@
+// Weather Clock for ESP32-C3 WiFi Toothbrush 
+// n24bass@gmail.com
+// original - https://github.com/redpower1998/esp8266-st7735-weather-clock
+// Hacking the WiFi Toothbrush - https://github.com/atc1441/ATC_Wifi_Toothbrush
+// 
+// IDE:Arduino
+// ArduinoJson 7.1.0
+// Adafruit_GFX 1.11.7
+// Adafruit_ST7735  1.10.3
+// ArduinoOTA 1.1.0
+
 // 代码没有被检查，没有删除无用代码，甚至没有格式化。所以代码质量凑合看吧。 
 // 代码发布在https://gitee.com/redpower/esp8266-st7735-weather-clock  
 // IDE:Arduino
@@ -9,13 +20,18 @@
 // 开发板 NodeMCU 1.0  ESP-12E  显示屏1.4TFT
 // 波特率115200
 
-#include <ESP8266WiFi.h>
+#define ESP32_RTOS
+
+#include <WiFi.h> // #include <ESP8266WiFi.h>
+#include <ESPmDNS.h>
 #include <WiFiClient.h>
 #include <DNSServer.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 #include <time.h>
 #include <Ticker.h>
 
-#include <ESP8266HTTPClient.h>
+#include <HTTPClient.h> // #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include <math.h>
 
@@ -55,21 +71,108 @@
 #define TFT_GREENYELLOW 0xB7E0      /* 180, 255,   0 */
 #define TFT_PINK        0xFC9F
 
-
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS,  TFT_RS, TFT_RST); // uses RGB565
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_SDI, TFT_CLK, TFT_RST); // uses RGB565
 
 // set of variables used into this sketch for different pourpose
 int weatherID = 0;
+
+#if defined(ESP32_RTOS) && defined(ESP32)
+void ota_handle( void * parameter ) {
+  for (;;) {
+    ArduinoOTA.handle();
+    delay(500); // 3500);
+  }
+}
+#endif
+
+void setupOTA(const char* nameprefix, const char* ssid, const char* password) {
+  // Configure the hostname
+  uint16_t maxlen = strlen(nameprefix) + 7;
+  char *fullhostname = new char[maxlen];
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  snprintf(fullhostname, maxlen, "%s-%02x%02x%02x", nameprefix, mac[3], mac[4], mac[5]);
+  ArduinoOTA.setHostname(fullhostname);
+  delete[] fullhostname;
+
+  // Configure and start the WiFi station
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  // Wait for connection
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    // Serial.println("Connection Failed! Rebooting...");
+    tft.println("Connection Failed! Rebooting...");
+    delay(5000);
+    ESP.restart();
+  }
+
+  // Port defaults to 3232
+  // ArduinoOTA.setPort(3232); // Use 8266 port if you are working in Sloeber IDE, it is fixed there and not adjustable
+
+  // No authentication by default
+  // ArduinoOTA.setPassword("admin");
+
+  // Password can be set with it's md5 value as well
+  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+
+  ArduinoOTA.onStart([]() {
+    //NOTE: make .detach() here for all functions called by Ticker.h library - not to interrupt transfer process in any way.
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH)
+      type = "sketch";
+    else // U_SPIFFS
+      type = "filesystem";
+
+    // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("\nAuth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("\nBegin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("\nConnect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("\nReceive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("\nEnd Failed");
+  });
+
+  ArduinoOTA.begin();
+
+  Serial.println("OTA Initialized");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+#if defined(ESP32_RTOS) && defined(ESP32)
+  xTaskCreate(
+    ota_handle,          /* Task function. */
+    "OTA_HANDLE",        /* String with name of task. */
+    10000,            /* Stack size in bytes. */
+    NULL,             /* Parameter passed as input of the task */
+    1,                /* Priority of the task. */
+    NULL);            /* Task handle. */
+#endif
+}
 
 void setup()
 {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
+
   pinMode(TFT_SDI, OUTPUT);
   analogWrite(TFT_SDI, 50);
   lcd_init();
 
-  configTime(timezone * 3600, 0, "pool.ntp.org"); //19800 (utc/gmt offset, daylight saving offset, ntp server)
+  configTime(timezone * 3600, 0, "pool.ntp.org"); // (utc/gmt offset, daylight saving offset, ntp server)
   Serial.println("\nWaiting for time sync");
   while (!time(nullptr))
   {
@@ -82,36 +185,31 @@ void setup()
     Serial.println("Hello world");
 }
 
-
-
 void lcd_init()
 {
-  tft.initR(INITR_144GREENTAB);
+  pinMode(18, OUTPUT); // LCD enable
+  digitalWrite(18, HIGH); 
+  pinMode(19, OUTPUT); // LCD Backlight
+  digitalWrite(19, LOW);
+
+  tft.initR(INITR_BLACKTAB);
+  tft.invertDisplay(true);
   tft.fillScreen(ST77XX_BLACK);
   delay(200);
-  tft.setRotation(tft.getRotation() + 2);
 
   tft.setTextSize(1);
   tft.setCursor(0, 0);
   tft.setTextColor(TFT_WHITE);
-  tft.setTextWrap(true);
+  tft.setTextWrap(false);
   tft.println("System Init...");
-  WiFi.begin(ssid, password);     //Connect to your WiFi router
 
-  // Wait for connection
-  tft.print("Connecting");
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    tft.print(".");
-    delay(1000);
-  }
+  setupOTA("WeatherClock", ssid, password);
 
   //If connection successful show IP address in serial monitor
   tft.println("");
   tft.println("Connected @ IP:");
   tft.println(WiFi.localIP());  //IP address assigned to your ESP
   tft.setFont(&FreeSans12pt7b);
-
 }
 
 void clockDisplay()
@@ -128,41 +226,41 @@ void clockDisplay()
   if (timeinfo->tm_year == 70)
   {
     tft.setFont();
-    tft.fillRect(45, 0, 128, 49, ST77XX_BLACK);
-    tft.setCursor(48, 22);
+    tft.fillRect(30, 0, 80, 49, ST77XX_BLACK);
+    tft.setCursor(33, 22);
     tft.setTextColor(TFT_YELLOW);
     tft.println("Sync Time...");
-    tft.drawFastHLine(0, 50, 128, ST77XX_GREEN); //Line
+    // tft.drawFastHLine(0, 50, 128, ST77XX_GREEN); //Line
     Serial.println("Sync Time...");
     return;
   }
   tft.setFont();
-  tft.setCursor(58, 12);
+  tft.setCursor(43, 12); // (58, 12);
   tft.setTextColor(ST7735_WHITE);
   tft.setFont(&FreeSansOblique9pt7b);
   if (old_day != timeinfo->tm_mday)
   {
     old_day = timeinfo->tm_mday;
-    tft.fillRect(45, 00, 128, 49, ST77XX_BLACK);
+    tft.fillRect(30, 0, 80, 49, ST77XX_BLACK);
   }
-  sprintf(buf, "%02d-%02d", timeinfo->tm_mon + 1, timeinfo->tm_mday);
+  sprintf(buf, "%02d/%02d", timeinfo->tm_mon + 1, timeinfo->tm_mday);
   displayTime = buf;
   tft.println(displayTime);
   Serial.println(displayTime);
 
-  tft.drawFastHLine(0, 50, 128, ST77XX_GREEN); //Line
+  // tft.drawFastHLine(0, 50, 128, ST77XX_GREEN); //Line
 
   if (old_min != timeinfo->tm_min)
   {
     old_min = timeinfo->tm_min;
-    tft.fillRect(45, 25, 128, 25, ST77XX_BLACK);
+    tft.fillRect(30, 25, 80, 25, ST77XX_BLACK);
   }
-  tft.fillRect(90, 25, 40, 25, ST77XX_BLACK);
+  tft.fillRect(75, 25, 40, 25, ST77XX_BLACK);
   sprintf(buf, "%02d:%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
   displayTime = buf;
-  tft.setCursor(45, 40);
-  tft.setTextColor(ST7735_YELLOW);
-  tft.setFont(&FreeSans9pt7b);
+  tft.setCursor(30, 40);
+  // tft.setTextColor(ST7735_YELLOW);
+  // tft.setFont(&FreeSans9pt7b);
   tft.println(displayTime);
   Serial.println(displayTime);
 
@@ -170,7 +268,8 @@ void clockDisplay()
 
 void drawBmp(int id)
 {
-  tft.drawBitmap(4 , 10, &Images[id][0], 40, 28, ST77XX_WHITE);
+  tft.fillRect(48, 50, 40, 28, ST77XX_BLACK);
+  tft.drawBitmap(48, 50, &Images[id][0], 40, 28, ST77XX_WHITE); // x, y, bitmap, w, h, color
 }
 bool isDay()
 {
@@ -180,7 +279,6 @@ bool isDay()
 }
 // Print WeatherIcon based on id
 void printWeatherIcon(int id) {
-  tft.fillRect(4, 10, 50, 38, ST77XX_BLACK);
   switch (id) {
     case 800:   //Clear
       if (isDay())
@@ -304,30 +402,34 @@ void getWeatherData() { //client function to send/receive GET request data.
   char jsonArray [result.length() + 1];
   result.toCharArray(jsonArray, sizeof(jsonArray));
   jsonArray[result.length() + 1] = '\0';
-  StaticJsonBuffer<2048> json_buf;
-  JsonObject &root = json_buf.parseObject(jsonArray);
-  if (!root.success()) {
-    Serial.println("parseObject() failed");
+  // StaticJsonBuffer<2048> json_buf;
+  // JsonObject &root = json_buf.parseObject(jsonArray);
+  JsonDocument doc; 
+  DeserializationError error = deserializeJson(doc, jsonArray);
+  if (error) { // (!root.success()) {
+    // Serial.println("parseObject() failed");
+    Serial.print("deserializeJson() returned ");
+    Serial.println(error.c_str());
     return ;
   }
 
   //TODO : try to understand why this double assignement is necessary
-  String temperatureLOC = root["main"]["temp"];
-  String weatherLOC = root["weather"][0]["main"];
-  String descriptionLOC = root["weather"][0]["description"];
-  String idStringLOC = root["weather"][0]["id"];
-  String umidityPerLOC = root["main"]["humidity"];
-  String windLOC = root["wind"]["speed"];
-  String pressureLOC = root["main"]["pressure"];
-  String visibilityLOC = root["visibility"];
-  String wind_angleLOC = root["wind"]["deg"];
-  String cloudsLOC = root ["clouds"]["all"] ;//["main"]
-  String temp_max =  root["main"]["temp_max"];
-  String temp_min =  root["main"]["temp_min"];
+  String temperatureLOC = doc["main"]["temp"]; // root["main"]["temp"];
+  String weatherLOC = doc["weather"][0]["main"]; // root["weather"][0]["main"];
+  String descriptionLOC = doc["weather"][0]["description"]; // root["weather"][0]["description"];
+  String idStringLOC = doc["weather"][0]["id"]; // root["weather"][0]["id"];
+  String umidityPerLOC = doc["main"]["humidity"]; // root["main"]["humidity"];
+  String windLOC = doc["wind"]["speed"]; // root["wind"]["speed"];
+  String pressureLOC = doc["main"]["pressure"]; // root["main"]["pressure"];
+  String visibilityLOC = doc["visibility"]; // root["visibility"];
+  String wind_angleLOC = doc["wind"]["deg"]; // root["wind"]["deg"];
+  String cloudsLOC = doc["clouds"]["all"]; //["main"] // root ["clouds"]["all"] ;//["main"]
+  String temp_max = doc["main"]["temp_max"]; // root["main"]["temp_max"];
+  String temp_min = doc["main"]["temp_min"]; // root["main"]["temp_min"];
 
-  String sunrise =  root["sys"]["sunrise"];
-  String sunset =  root["sys"]["sunset"];
-  String city_name =  root["name"];
+  String sunrise =  doc["sys"]["sunrise"]; // root["sys"]["sunrise"];
+  String sunset =  doc["sys"]["sunset"]; // root["sys"]["sunset"];
+  String city_name =  doc["name"]; // root["name"];
   time_t sun_time = sunrise.toInt();
   char buf[6];
   struct tm * timeinfo = localtime (&sun_time);
@@ -342,18 +444,18 @@ void getWeatherData() { //client function to send/receive GET request data.
   weatherID = idStringLOC.toInt();
   printWeatherIcon(weatherID);
 
-  tft.fillRect(0, 52, 128, 76, TFT_NAVY);
-  tft.setCursor(0, 54);
+  tft.fillRect(30, 80, 80, 80, ST77XX_BLACK);
+  tft.setCursor(0, 84); 
   tft.setFont();
   tft.setTextColor(ST7735_YELLOW);
 
-  tft.println("Temp:" + temperatureLOC + " (" + temp_min + "-" + temp_max + ")");
-  tft.println("Weather:" + weatherLOC);
-  tft.println("Desc:" + descriptionLOC + ":" + idStringLOC);
-  tft.println("Wind:" + wind_angleLOC + " Speed:" + windLOC);
-  tft.println("Clouds:" + cloudsLOC + " Visi:" + visibilityLOC);
-  tft.println("Humidity:" + umidityPerLOC);
-  tft.println("Sun:" + sunrise + " - " + sunset);
+  tft.println("     T:" + temperatureLOC + " (" + temp_min + "-" + temp_max + ")");
+  tft.println("     W:" + weatherLOC);
+  tft.println("     D:" + descriptionLOC + ":" + idStringLOC);
+  tft.println("     W:" + wind_angleLOC + " Speed:" + windLOC);
+  tft.println("     C:" + cloudsLOC + " Visi:" + visibilityLOC);
+  tft.println("     H:" + umidityPerLOC);
+  tft.println("     S:" + sunrise + "-" + sunset);
   tft.setTextColor(ST7735_GREEN);
 
   time_t cur_time = time(nullptr);
@@ -361,7 +463,8 @@ void getWeatherData() { //client function to send/receive GET request data.
   sprintf(buf, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
   sunrise = buf;
 
-  tft.println(city_name + "  " + sunrise);
+  tft.println("       " + city_name);
+  tft.println("       " + sunrise);
 }
 
 void loop()
@@ -377,13 +480,14 @@ void loop()
     delay(1000);
   }
   tft.setFont();
-  tft.fillRect(45, 0, 128, 49, ST77XX_BLACK);
-  tft.setCursor(58, 16);
+  tft.fillRect(30, 0, 80, 49, ST77XX_BLACK);
+  tft.setCursor(43, 16);
   tft.setTextColor(TFT_RED);
+  Serial.println("Update Weather");
   tft.print("Update");
-  tft.setCursor(58, 26);
+  tft.setCursor(43, 26);
   tft.print("Weather...");
   getWeatherData();
-  tft.fillRect(45, 0, 128, 49, ST77XX_BLACK);
+  tft.fillRect(30, 0, 80, 49, ST77XX_BLACK);
   clockDisplay();
 }
